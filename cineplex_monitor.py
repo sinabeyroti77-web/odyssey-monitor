@@ -65,6 +65,17 @@ def get_odyssey_dates(playwright) -> list[str]:
     page.goto(URL, wait_until="networkidle", timeout=30000)
     page.wait_for_timeout(2000)
 
+    # Dismiss the cookie consent banner first. A completely fresh,
+    # cookie-less session (like every GitHub Actions run) always shows
+    # this, and it sits on top of the page -- if we don't close it,
+    # every click below silently fails because the banner intercepts
+    # the click instead of the real button underneath it.
+    try:
+        page.get_by_role("button", name=re.compile("^OK$", re.I)).first.click(timeout=5000)
+        page.wait_for_timeout(1000)
+    except Exception as e:
+        print(f"Note: no cookie banner found/dismissed ({e}). Continuing.")
+
     # 1. Force the theatre to SilverCity Riverport -- a fresh/cookie-less
     #    session can otherwise default to geolocation "near me" and show
     #    the wrong theatre entirely.
