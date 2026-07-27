@@ -51,24 +51,42 @@ URL = "https://www.cineplex.com/theatre/silvercity-riverport-cinemas?openTM=true
 STATE_FILE = Path(__file__).parent / "last_dates.txt"
 
 
-def click_first_visible(locator, description: str, timeout_ms: int = 5000) -> bool:
+def js_click_button(page, text_pattern: str, description: str, exact_start: bool = True) -> bool:
     """
-    Click the first element matching `locator` that is actually visible.
-    Cineplex's page includes duplicate elements for mobile vs desktop
-    layouts (e.g. a hidden <h2>The Odyssey</h2> alongside a visible one),
-    and plain .first can grab the hidden one, which times out forever.
+    Find a visible <button> whose text matches, and click it via JavaScript.
+
+    Two problems this solves, both confirmed from real GitHub Actions logs:
+
+    1. Google ad iframes and the sticky header overlay the page and
+       "intercept pointer events", so normal Playwright clicks retry
+       forever and time out. A JS .click() dispatches directly on the
+       element and ignores whatever is painted on top of it.
+
+    2. Matching on page text alone can resolve to the wrong element --
+       e.g. the theatre page's own <h1> heading rather than the option
+       inside the picker. Restricting to <button> avoids that.
     """
     try:
-        count = locator.count()
-        for i in range(count):
-            candidate = locator.nth(i)
-            if candidate.is_visible():
-                candidate.click(timeout=timeout_ms)
-                return True
-        print(f"Warning: found {count} match(es) for '{description}' but none were visible.")
+        clicked = page.evaluate(
+            """
+            ({ pattern, exactStart }) => {
+                const re = new RegExp(exactStart ? '^' + pattern : pattern, 'i');
+                const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+                const match = buttons.find(b =>
+                    re.test((b.textContent || '').trim()) && b.offsetParent !== null
+                );
+                if (match) { match.click(); return true; }
+                return false;
+            }
+            """,
+            {"pattern": text_pattern, "exactStart": exact_start},
+        )
+        if not clicked:
+            print(f"Warning: no visible button matched '{description}'.")
+        return bool(clicked)
     except Exception as e:
         print(f"Warning: couldn't click '{description}' ({e}).")
-    return False
+        return False
 
 
 def get_odyssey_dates(playwright) -> list[str]:
@@ -108,25 +126,36 @@ def get_odyssey_dates(playwright) -> list[str]:
     except Exception as e:
         print(f"Note: no cookie banner found/dismissed ({e}). Continuing.")
 
-    # 1. Force the theatre to SilverCity Riverport -- a fresh/cookie-less
-    #    session can otherwise default to geolocation "near me" and show
-    #    the wrong theatre entirely.
-    if click_first_visible(page.get_by_role("button", name=re.compile("^Theatre", re.I)), "Theatre field"):
-        page.wait_for_timeout(1000)
-        click_first_visible(page.get_by_text("SilverCity Riverport Cinemas", exact=False), "SilverCity Riverport option")
-        page.wait_for_timeout(2000)
+    # 1. Force the theatre to SilverCity Riverport.
+    #
+    #    IMPORTANT: the picker's "nearby" list is sorted by distance from
+    #    whatever machine is running the browser. GitHub Actions runners
+    #    live in Ontario, so that list comes back full of Welland,
+    #    Hamilton, London etc. and Riverport (Richmond, BC) is ~750km
+    #    away and never appears. So we must TYPE INTO THE SEARCH BOX
+    #    rather than trying to pick it out of the nearby list.
+    if js_click_button(page, "Theatre", "Theatre field"):
+        page.wait_for_timeout(1500)
+        try:
+            search_box = page.get_by_placeholder(re.compile("Search by theatres", re.I))
+            search_box.fill("Riverport", timeout=8000)
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            print(f"Warning: couldn't type into theatre search box ({e}).")
+        js_click_button(page, "SilverCity Riverport Cinemas", "SilverCity Riverport option")
+        page.wait_for_timeout(3000)
 
     # 2. Filter the movie to "The Odyssey" specifically -- "All Movies"
     #    shows a much longer date list for the theatre in general, which
     #    isn't what we care about.
-    if click_first_visible(page.get_by_role("button", name=re.compile("^Movie", re.I)), "Movie field"):
-        page.wait_for_timeout(1000)
-        click_first_visible(page.get_by_text("The Odyssey", exact=True), "The Odyssey option")
-        page.wait_for_timeout(2000)
+    if js_click_button(page, "Movie", "Movie field"):
+        page.wait_for_timeout(1500)
+        js_click_button(page, "The Odyssey", "The Odyssey option")
+        page.wait_for_timeout(3000)
 
     # 3. Open the date picker and read the list of bookable dates.
-    click_first_visible(page.get_by_role("button", name=re.compile("^Date", re.I)), "Date field")
-    page.wait_for_timeout(1500)
+    js_click_button(page, "Date", "Date field")
+    page.wait_for_timeout(2500)
 
     body_text = page.inner_text("body")
     browser.close()
@@ -135,6 +164,17 @@ def get_odyssey_dates(playwright) -> list[str]:
         r"(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}",
         body_text,
     )
+
+    # Safety check: the runner is in Ontario, so if theatre selection
+    # silently failed we could end up reporting dates for a completely
+    # different cinema. Better to report nothing than the wrong thing.
+    if "Riverport" not in body_text:
+        print("ERROR: 'Riverport' not found on the final page -- theatre selection likely failed.")
+        print("Refusing to report dates that may belong to the wrong theatre.")
+        print("---- DEBUG: first 1500 chars of page text: ----")
+        print(body_text[:1500])
+        print("---- END DEBUG ----")
+        return []
 
     if not dates:
         # Dump what we actually saw, so a failed run is diagnosable from
