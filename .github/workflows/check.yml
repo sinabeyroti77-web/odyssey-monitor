@@ -2,9 +2,9 @@ name: Cineplex Odyssey Date Check
 
 on:
   schedule:
-    # Runs every 15 minutes. GitHub's actual timing can lag a few
+    # Runs every 30 minutes. GitHub's actual timing can lag a few
     # minutes during busy periods -- that's normal, not a bug.
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch: {}   # lets you also trigger it manually from the Actions tab
 
 jobs:
