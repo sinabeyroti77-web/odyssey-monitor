@@ -69,6 +69,9 @@ def click_first_visible(locator, description: str, timeout_ms: int = 5000) -> bo
     except Exception as e:
         print(f"Warning: couldn't click '{description}' ({e}).")
     return False
+
+
+def get_odyssey_dates(playwright) -> list[str]:
     """
     Load the Cineplex ticket modal, lock the theatre to SilverCity
     Riverport, filter the movie to The Odyssey, open the date picker,
