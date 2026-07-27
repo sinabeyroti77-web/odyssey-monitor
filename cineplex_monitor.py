@@ -51,7 +51,24 @@ URL = "https://www.cineplex.com/theatre/silvercity-riverport-cinemas?openTM=true
 STATE_FILE = Path(__file__).parent / "last_dates.txt"
 
 
-def get_odyssey_dates(playwright) -> list[str]:
+def click_first_visible(locator, description: str, timeout_ms: int = 5000) -> bool:
+    """
+    Click the first element matching `locator` that is actually visible.
+    Cineplex's page includes duplicate elements for mobile vs desktop
+    layouts (e.g. a hidden <h2>The Odyssey</h2> alongside a visible one),
+    and plain .first can grab the hidden one, which times out forever.
+    """
+    try:
+        count = locator.count()
+        for i in range(count):
+            candidate = locator.nth(i)
+            if candidate.is_visible():
+                candidate.click(timeout=timeout_ms)
+                return True
+        print(f"Warning: found {count} match(es) for '{description}' but none were visible.")
+    except Exception as e:
+        print(f"Warning: couldn't click '{description}' ({e}).")
+    return False
     """
     Load the Cineplex ticket modal, lock the theatre to SilverCity
     Riverport, filter the movie to The Odyssey, open the date picker,
@@ -79,31 +96,22 @@ def get_odyssey_dates(playwright) -> list[str]:
     # 1. Force the theatre to SilverCity Riverport -- a fresh/cookie-less
     #    session can otherwise default to geolocation "near me" and show
     #    the wrong theatre entirely.
-    try:
-        page.get_by_role("button", name=re.compile("^Theatre", re.I)).first.click(timeout=5000)
+    if click_first_visible(page.get_by_role("button", name=re.compile("^Theatre", re.I)), "Theatre field"):
         page.wait_for_timeout(1000)
-        page.get_by_text("SilverCity Riverport Cinemas", exact=False).first.click(timeout=5000)
+        click_first_visible(page.get_by_text("SilverCity Riverport Cinemas", exact=False), "SilverCity Riverport option")
         page.wait_for_timeout(2000)
-    except Exception as e:
-        print(f"Warning: couldn't select theatre explicitly ({e}). Continuing anyway.")
 
     # 2. Filter the movie to "The Odyssey" specifically -- "All Movies"
     #    shows a much longer date list for the theatre in general, which
     #    isn't what we care about.
-    try:
-        page.get_by_role("button", name=re.compile("^Movie", re.I)).first.click(timeout=5000)
+    if click_first_visible(page.get_by_role("button", name=re.compile("^Movie", re.I)), "Movie field"):
         page.wait_for_timeout(1000)
-        page.get_by_text("The Odyssey", exact=True).first.click(timeout=5000)
+        click_first_visible(page.get_by_text("The Odyssey", exact=True), "The Odyssey option")
         page.wait_for_timeout(2000)
-    except Exception as e:
-        print(f"Warning: couldn't select movie explicitly ({e}). Continuing anyway.")
 
     # 3. Open the date picker and read the list of bookable dates.
-    try:
-        page.get_by_role("button", name=re.compile("^Date", re.I)).first.click(timeout=5000)
-        page.wait_for_timeout(1500)
-    except Exception as e:
-        print(f"Warning: couldn't open date picker ({e}).")
+    click_first_visible(page.get_by_role("button", name=re.compile("^Date", re.I)), "Date field")
+    page.wait_for_timeout(1500)
 
     body_text = page.inner_text("body")
     browser.close()
