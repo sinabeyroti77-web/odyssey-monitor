@@ -82,8 +82,20 @@ def get_odyssey_dates(playwright) -> list[str]:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ))
-    page.goto(URL, wait_until="networkidle", timeout=30000)
-    page.wait_for_timeout(2000)
+    # Use "domcontentloaded" rather than "networkidle": Cineplex runs ads
+    # and analytics that poll continuously, so the network may never go
+    # fully idle and networkidle can hang until timeout. We wait for the
+    # DOM, then explicitly wait for the ticket modal content to appear.
+    page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+
+    # Wait for the ticket modal to actually render (it's client-side).
+    # If it doesn't show up we still continue -- the later steps print
+    # their own diagnostics.
+    try:
+        page.wait_for_selector("text=Tickets", timeout=20000)
+    except Exception as e:
+        print(f"Note: ticket modal didn't appear within 20s ({e}). Continuing.")
+    page.wait_for_timeout(3000)
 
     # Dismiss the cookie consent banner first. A completely fresh,
     # cookie-less session (like every GitHub Actions run) always shows
@@ -123,6 +135,14 @@ def get_odyssey_dates(playwright) -> list[str]:
         r"(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}",
         body_text,
     )
+
+    if not dates:
+        # Dump what we actually saw, so a failed run is diagnosable from
+        # the GitHub Actions log instead of being a silent mystery.
+        print("---- DEBUG: no dates matched. First 1500 chars of page text: ----")
+        print(body_text[:1500])
+        print("---- END DEBUG ----")
+
     # de-duplicate while preserving order
     seen = set()
     ordered_dates = []
