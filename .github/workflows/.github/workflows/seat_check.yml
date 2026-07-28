@@ -1,0 +1,69 @@
+name: Cineplex Odyssey Seat Watcher
+
+on:
+  schedule:
+    # Cancellations cluster 1-2 days out and in the final 12 hours before
+    # a show, so this one wants to run steadily around the clock rather
+    # than in a weekly burst like the date checker.
+    - cron: "*/15 * * * *"
+
+  # External trigger (cron-job.org etc.) -- GitHub's own cron silently
+  # drops a large share of scheduled runs, so this is the reliable path.
+  repository_dispatch:
+    types: [run-seat-check]
+
+  workflow_dispatch: {}
+
+concurrency:
+  group: odyssey-seat-watcher
+  cancel-in-progress: false
+
+jobs:
+  seats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: playwright install --with-deps chromium
+
+      - name: Run seat watcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Dates you actually want to attend, separated by "|".
+          # Leave empty to just watch the furthest-out bookable date.
+          # Example: "August 15, 2026|August 16, 2026"
+          TARGET_DATES: ${{ vars.TARGET_DATES }}
+        run: python seat_watcher.py
+
+      - name: Commit updated state file (if changed)
+        run: |
+          git config user.name "cineplex-monitor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if [ -f last_showtimes.json ]; then
+            git add last_showtimes.json
+            git diff --quiet --cached || git commit -m "Update showtime availability"
+            git pull --rebase --autostash || true
+            git push
+          else
+            echo "last_showtimes.json not created -- skipping commit."
+          fi
